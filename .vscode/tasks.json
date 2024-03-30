@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "go: build debug plugin",
+			"command": "cd ${workspaceFolder}/src/main; go build -gcflags='all=-N -l' -buildmode=plugin ../mrapps/wc.go",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$go"
+			],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+		}
+	]
+}
