@@ -12,14 +12,17 @@ import (
 )
 
 const (
-	ProcessFile int = 0
-	Wait        int = 1
-	Terminate   int = 2
+	Map       int = 0
+	Reduce    int = 1
+	Wait      int = 2
+	Terminate int = 3
 )
 
-type MapRequestReply struct {
-	Filepath string
-	Action   int
+type WorkerRequestReply struct {
+	Action         int
+	ActionFilepath string
+	ActionId       int
+	TotalReduce    int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

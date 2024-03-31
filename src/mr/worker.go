@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -28,38 +29,52 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	workerId := RegisterSelf()
-	if workerId < 0 {
-		fmt.Printf("failed to register, quitting")
-		return
-	}
-
 	// declare an argument structure.
-	args := workerId
+	args := 0
 
 	// declare a reply structure.
-	reply := MapRequestReply{}
+	reply := WorkerRequestReply{}
 
-	intermediate := []KeyValue{}
 	for {
 		// send the RPC request, wait for the reply.
 		// the "Coordinator.Example" tells the
 		// receiving server that we'd like to call
 		// the Example() method of struct Coordinator.
-		ok := call("Coordinator.MapRequest", &args, &reply)
+		ok := call("Coordinator.WorkerRequest", &args, &reply)
 		if ok {
-			if reply.Action == ProcessFile {
-				file, err := os.Open(reply.Filepath)
+			if reply.Action == Map {
+				file, err := os.Open(reply.ActionFilepath)
 				if err != nil {
-					log.Fatalf("cannot open %v", reply.Filepath)
+					log.Fatalf("cannot open %v", reply.ActionFilepath)
 				}
 				content, err := io.ReadAll(file)
 				if err != nil {
-					log.Fatalf("cannot read %v", reply.Filepath)
+					log.Fatalf("cannot read %v", reply.ActionFilepath)
 				}
 				file.Close()
-				kva := mapf(reply.Filepath, string(content))
-				intermediate = append(intermediate, kva...)
+
+				kva := mapf(reply.ActionFilepath, string(content))
+
+				reduceFileArray := make([][]KeyValue, reply.TotalReduce)
+				for _, kv := range kva {
+					reduceId := ihash(kv.Key) % reply.TotalReduce
+					reduceFileArray[reduceId] = append(reduceFileArray[reduceId], kv)
+				}
+
+				for i, interKva := range reduceFileArray {
+					intermediateFile := fmt.Sprintf("mr-%d-%d.json", reply.ActionId, i)
+					file, err = os.Create(intermediateFile)
+					if err != nil {
+						log.Fatalf("cannot create %v", intermediateFile)
+					}
+					enc := json.NewEncoder(file)
+					for _, kv := range interKva {
+						err := enc.Encode(&kv)
+						if err != nil {
+							log.Fatalf("could not write %s to json", kv)
+						}
+					}
+				}
 			} else if reply.Action == Terminate {
 				fmt.Printf("all done")
 				break
@@ -70,21 +85,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		time.Sleep(1 * time.Second)
 	}
 
-}
-
-func RegisterSelf() int {
-
-	// declare an argument structure.
-	args := 0
-	id := 0
-
-	ok := call("Coordinator.WorkerRegister", &args, &id)
-	if ok {
-		return id
-	} else {
-		fmt.Printf("call failed!\n")
-		return -1
-	}
 }
 
 // send an RPC request to the coordinator, wait for the response.

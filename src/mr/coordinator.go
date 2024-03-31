@@ -10,25 +10,21 @@ import (
 )
 
 type Coordinator struct {
-	mu         sync.Mutex
-	files      []string
-	numWorkers int
+	mu      sync.Mutex
+	files   []string
+	nReduce int
+	currMap int
 }
 
-func (c *Coordinator) WorkerRegister(args *int, reply *int) error {
-	c.mu.Lock()
-	*reply = c.numWorkers
-	c.numWorkers++
-	c.mu.Unlock()
-	return nil
-}
-
-func (c *Coordinator) MapRequest(args *int, reply *MapRequestReply) error {
+func (c *Coordinator) WorkerRequest(args *int, reply *WorkerRequestReply) error {
 	c.mu.Lock()
 	if len(c.files) > 0 {
-		reply.Action = ProcessFile
-		reply.Filepath = c.files[0]
+		reply.Action = Map
+		reply.ActionId = c.currMap
+		reply.ActionFilepath = c.files[0]
+		reply.TotalReduce = c.nReduce
 		c.files = c.files[1:]
+		c.currMap++
 	} else {
 		reply.Action = Terminate
 	}
@@ -66,7 +62,7 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.files = files
-	c.numWorkers = 0
+	c.nReduce = nReduce
 
 	c.server()
 	return &c
