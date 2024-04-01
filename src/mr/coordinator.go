@@ -135,6 +135,9 @@ func (c *Coordinator) WorkerStatusUpdate(args *WorkerStatusArg, _ *struct{}) err
 func (c *Coordinator) WorkerRequest(_ *struct{}, reply *WorkerRequestReply) error {
 	c.mu.Lock()
 	if len(c.mapTasksToAssign) > 0 {
+		/* if we have map tasks, ie input files, left to process give the worker
+		 * one of those
+		 */
 		reply.Action = Map
 		reply.ActionId = c.mapTasksToAssign[0]
 		reply.ActionFilepath = c.files[c.mapTasksToAssign[0]]
@@ -144,8 +147,12 @@ func (c *Coordinator) WorkerRequest(_ *struct{}, reply *WorkerRequestReply) erro
 		go c.WaitForMap(c.mapTasksToAssign[0])
 		c.mapTasksToAssign = c.mapTasksToAssign[1:]
 	} else if c.mapTasksRemaining != 0 {
+		/* if we have no more map tasks to assign but there's still map tasks in flight
+		 * tell the worker to chill
+		 */
 		reply.Action = Wait
 	} else if len(c.reduceTasksToAssign) > 0 {
+		/* once all map tasks have complete start assigning reduce tasks */
 		reply.Action = Reduce
 		reply.ActionId = c.reduceTasksToAssign[0]
 		statusChan := make(chan bool)
@@ -153,7 +160,10 @@ func (c *Coordinator) WorkerRequest(_ *struct{}, reply *WorkerRequestReply) erro
 		go c.WaitForReduce(c.reduceTasksToAssign[0])
 		c.reduceTasksToAssign = c.reduceTasksToAssign[1:]
 	} else if c.reduceTasksRemaining != 0 {
-		/* keep the workers around to make sure everything completes */
+		/* if no more reduce tasks to assign keep the worker around in case a task in
+		 * flight errors or times out. that worker that timed out maybe crashed so we
+		 * need valid workers around still
+		 */
 		reply.Action = Wait
 	} else {
 		/* all map & reduce tasks have finished, time to go home */

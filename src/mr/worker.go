@@ -51,7 +51,14 @@ func Worker(mapf func(string, string) []KeyValue,
 		ok := call("Coordinator.WorkerRequest", &emptyArg, &request)
 		if ok {
 			if request.Action == Map {
-
+				/* map task overview (heavily borrowed from mrsequential.go):
+				 * 	- open the input file and read it all into a string
+				 *	- call the mapf plugin function on the string
+				 *	- create a temporary array of KeyValue arrays for each reduce task
+				 *	- use the hash function to determine which reduce task a key should belong to
+				 *	- write out the reduce task input into temp files then use os.rename
+				 *	- send done status back to coordinator with the map taskId
+				 */
 				file, err := os.Open(request.ActionFilepath)
 				if err != nil {
 					log.Fatal(err)
@@ -101,6 +108,15 @@ func Worker(mapf func(string, string) []KeyValue,
 				}
 			} else if request.Action == Reduce {
 
+				/* reduce task overview (heavily borrowed from mrsequential.go):
+				 * 	- gather up all the input files (from a map task) that belong to this reduce task
+				 *	- foreach file read & append to a KeyValue array
+				 *	- sort the KeyValue array
+				 *	- create a temp output file and print the output of reducef for each
+				 *		unique key
+				 *	- tell the coordinator this task is done
+				 *	- rename the temp output file and remove all the input files
+				 */
 				reduceFilePattern := fmt.Sprintf("mr-*-%d.json", request.ActionId)
 				reduceFiles, err := filepath.Glob(reduceFilePattern)
 				if err != nil {
@@ -172,6 +188,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					os.Remove(filepath)
 				}
 			} else if request.Action == Wait {
+				/* arbitrary 50ms sleep */
 				time.Sleep(50 * time.Millisecond)
 			} else {
 				return
