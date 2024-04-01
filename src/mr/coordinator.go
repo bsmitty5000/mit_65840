@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -58,15 +57,11 @@ func (c *Coordinator) WaitForMap(mapIdx int) {
 			<-timer1.C
 		}
 		if !result {
-			fmt.Printf("map id %d ran into an error, putting it back!\n", mapIdx)
 			c.mu.Lock()
 			c.reduceTasksToAssign = append(c.reduceTasksToAssign, mapIdx)
 			c.mu.Unlock()
-		} else {
-			fmt.Printf("ya! map id %d completed!\n", mapIdx)
 		}
 	case <-timer1.C:
-		fmt.Printf("map id %d did not complete, putting it back!\n", mapIdx)
 		c.mu.Lock()
 		c.mapTasksToAssign = append(c.mapTasksToAssign, mapIdx)
 		c.mu.Unlock()
@@ -90,15 +85,11 @@ func (c *Coordinator) WaitForReduce(redIdx int) {
 			<-timer1.C
 		}
 		if !result {
-			fmt.Printf("reduce id %d ran into an error, putting it back!\n", redIdx)
 			c.mu.Lock()
 			c.reduceTasksToAssign = append(c.reduceTasksToAssign, redIdx)
 			c.mu.Unlock()
-		} else {
-			fmt.Printf("ya! reduce id %d completed!\n", redIdx)
 		}
 	case <-timer1.C:
-		fmt.Printf("reduce id %d did not complete, putting it back!\n", redIdx)
 		c.mu.Lock()
 		c.reduceTasksToAssign = append(c.reduceTasksToAssign, redIdx)
 		c.mu.Unlock()
@@ -161,7 +152,11 @@ func (c *Coordinator) WorkerRequest(_ *struct{}, reply *WorkerRequestReply) erro
 		c.reduceChannels[c.reduceTasksToAssign[0]] = statusChan
 		go c.WaitForReduce(c.reduceTasksToAssign[0])
 		c.reduceTasksToAssign = c.reduceTasksToAssign[1:]
+	} else if c.reduceTasksRemaining != 0 {
+		/* keep the workers around to make sure everything completes */
+		reply.Action = Wait
 	} else {
+		/* all map & reduce tasks have finished, time to go home */
 		reply.Action = Terminate
 	}
 	c.mu.Unlock()

@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -17,6 +18,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -42,7 +51,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		ok := call("Coordinator.WorkerRequest", &emptyArg, &request)
 		if ok {
 			if request.Action == Map {
-				fmt.Printf("Worker %d processing %s\n", request.ActionId, request.ActionFilepath)
 
 				file, err := os.Open(request.ActionFilepath)
 				if err != nil {
@@ -50,9 +58,6 @@ func Worker(mapf func(string, string) []KeyValue,
 				}
 				defer file.Close()
 
-				if err != nil {
-					log.Fatalf("cannot open %v", request.ActionFilepath)
-				}
 				content, err := io.ReadAll(file)
 				if err != nil {
 					log.Fatalf("cannot read %v", request.ActionFilepath)
@@ -92,7 +97,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				ok := call("Coordinator.WorkerStatusUpdate", &status, &emptyArg)
 				if !ok {
 					fmt.Printf("status update call failed!\n")
-					break
+					return
 				}
 			} else if request.Action == Reduce {
 
@@ -101,26 +106,79 @@ func Worker(mapf func(string, string) []KeyValue,
 				if err != nil {
 					log.Fatal(err)
 				}
-				for _, file := range reduceFiles {
-					fmt.Printf("Reduce %d: %s\n", request.ActionId, file)
+
+				var intermediate []KeyValue
+				for _, filepath := range reduceFiles {
+
+					file, err := os.Open(filepath)
+					if err != nil {
+						log.Fatal(err)
+					}
+					defer file.Close()
+
+					dec := json.NewDecoder(file)
+					for {
+						var kv KeyValue
+						if err := dec.Decode(&kv); err != nil {
+							break
+						}
+						intermediate = append(intermediate, kv)
+					}
+				}
+
+				sort.Sort(ByKey(intermediate))
+
+				t, err := os.CreateTemp("", "")
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer os.Remove(t.Name())
+
+				//
+				// call Reduce on each distinct key in intermediate[],
+				// and print the result to mr-out-0.
+				//
+				i := 0
+				for i < len(intermediate) {
+					j := i + 1
+					for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+						j++
+					}
+					values := []string{}
+					for k := i; k < j; k++ {
+						values = append(values, intermediate[k].Value)
+					}
+					output := reducef(intermediate[i].Key, values)
+
+					// this is the correct format for each line of Reduce output.
+					fmt.Fprintf(t, "%v %v\n", intermediate[i].Key, output)
+
+					i = j
 				}
 
 				status := WorkerStatusArg{Action: Reduce, ActionId: request.ActionId, Status: Done}
 				ok := call("Coordinator.WorkerStatusUpdate", &status, &emptyArg)
 				if !ok {
 					fmt.Printf("status update call failed!\n")
-					break
+					return
+				}
+
+				oname := fmt.Sprintf("mr-out-%d", request.ActionId)
+				err = os.Rename(t.Name(), oname)
+				if err != nil {
+					log.Fatal(err)
+				}
+				for _, filepath := range reduceFiles {
+					os.Remove(filepath)
 				}
 			} else if request.Action == Wait {
-				fmt.Print("*twiddling thumbs*\n")
 				time.Sleep(50 * time.Millisecond)
 			} else {
-				fmt.Printf("all done!\n")
-				break
+				return
 			}
 		} else {
 			fmt.Printf("call failed!\n")
-			break
+			return
 		}
 	}
 
