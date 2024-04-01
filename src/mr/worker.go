@@ -39,14 +39,10 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// declare an argument structure.
+	// empty first argument
 	var emptyArg struct{}
 
 	for {
-		// send the RPC request, wait for the request.
-		// the "Coordinator.Example" tells the
-		// receiving server that we'd like to call
-		// the Example() method of struct Coordinator.
 		request := WorkerRequestReply{}
 		ok := call("Coordinator.WorkerRequest", &emptyArg, &request)
 		if ok {
