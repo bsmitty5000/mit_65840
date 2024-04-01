@@ -20,8 +20,8 @@ type Coordinator struct {
 	/* the 'tasks' here indicate indices into the files array for the map
 	 * tasks and task numbers for the reduce tasks which tell the reduce
 	 * task which files to process, ie 'mr-{reduce task #}-Y.json'
-	 * When a task id is assigned it's popped off the stack. if a task
-	 * doesn't complete in time the task id is pushed back onto the stack
+	 * When a task id is assigned it's popped off the queue. if a task
+	 * doesn't complete in time the task id is pushed back onto the queue
 	 */
 	mapTasksToAssign    []int
 	reduceTasksToAssign []int
@@ -43,6 +43,18 @@ type Coordinator struct {
 	mapChannels    map[int]chan bool
 }
 
+/* WaitForMap and WaitForReduce are kicked off each time a map & reduce task is assigned
+ * in WorkerRequest
+ * WorkerRequest will create a channel to communicate done status
+ * WaitForMap/WaitForReduce will start a 10second timer at the beginning
+ * Three possible outcomes:
+ *	- timer completes first, in which case the task is added back to the queue
+ *	- done channel first first (in which case clear out the timer channel)
+ *		- done is false, in which case add the task back to the queue
+ *		- done is true - do nothing (WorkerStatusUpdate decrements the map/reduceTasksRemaining count)
+ * Regardless of the three outcomes, always delete the channel from the map &
+ * close the channel
+ */
 func (c *Coordinator) WaitForMap(mapIdx int) {
 	c.mu.Lock()
 	taskDoneChannel := c.mapChannels[mapIdx]
@@ -100,11 +112,16 @@ func (c *Coordinator) WaitForReduce(redIdx int) {
 	c.mu.Unlock()
 }
 
+/* WorkerStatusUpdate is an RPC entry point for the workers to report back status
+ * This method will communicate over the existing taskId channel to give either True
+ * for done or false for error to the waiting WaitForMap/Reduce method
+ * If status is Done decremement the appropriate map/reduceTasksRemaining count
+ */
 func (c *Coordinator) WorkerStatusUpdate(args *WorkerStatusArg, _ *struct{}) error {
 	/* if status indicates done send a true value over the channel and decrement the number
 	 * of tasks remaining. otherwise, send false over channel
 	 * the go routine waiting for the timer is reponsible for putting the task back onto
-	 * worker remaining stack
+	 * worker remaining queue
 	 */
 	if args.Status == Done {
 		if args.Action == Map {
@@ -132,6 +149,14 @@ func (c *Coordinator) WorkerStatusUpdate(args *WorkerStatusArg, _ *struct{}) err
 	return nil
 }
 
+/* Main entry point for Worker threads. A single WorkerRequestReply struct is used for
+ * all possible tasks
+ * Assign tasks as appropriate, working our way through:
+ * 	1. map tasks remaining to be assigned
+ *	2. map tasks remaining to complete
+ *	3. reduce tasks remaining to be assigned
+ *	4. reduce tasks remaining to complete
+ */
 func (c *Coordinator) WorkerRequest(_ *struct{}, reply *WorkerRequestReply) error {
 	c.mu.Lock()
 	if len(c.mapTasksToAssign) > 0 {
@@ -189,6 +214,7 @@ func (c *Coordinator) server() {
 
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
+/* Simply checks if any reduce tasks are reminaing to complete */
 func (c *Coordinator) Done() bool {
 	ret := false
 
