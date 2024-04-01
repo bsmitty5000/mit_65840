@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -30,59 +31,97 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// declare an argument structure.
-	args := 0
-
-	// declare a reply structure.
-	reply := WorkerRequestReply{}
+	var emptyArg struct{}
 
 	for {
-		// send the RPC request, wait for the reply.
+		// send the RPC request, wait for the request.
 		// the "Coordinator.Example" tells the
 		// receiving server that we'd like to call
 		// the Example() method of struct Coordinator.
-		ok := call("Coordinator.WorkerRequest", &args, &reply)
+		request := WorkerRequestReply{}
+		ok := call("Coordinator.WorkerRequest", &emptyArg, &request)
 		if ok {
-			if reply.Action == Map {
-				file, err := os.Open(reply.ActionFilepath)
+			if request.Action == Map {
+				fmt.Printf("Worker %d processing %s\n", request.ActionId, request.ActionFilepath)
+
+				file, err := os.Open(request.ActionFilepath)
 				if err != nil {
-					log.Fatalf("cannot open %v", reply.ActionFilepath)
+					log.Fatal(err)
+				}
+				defer file.Close()
+
+				if err != nil {
+					log.Fatalf("cannot open %v", request.ActionFilepath)
 				}
 				content, err := io.ReadAll(file)
 				if err != nil {
-					log.Fatalf("cannot read %v", reply.ActionFilepath)
+					log.Fatalf("cannot read %v", request.ActionFilepath)
 				}
-				file.Close()
 
-				kva := mapf(reply.ActionFilepath, string(content))
+				kva := mapf(request.ActionFilepath, string(content))
 
-				reduceFileArray := make([][]KeyValue, reply.TotalReduce)
+				reduceFileArray := make([][]KeyValue, request.TotalReduce)
 				for _, kv := range kva {
-					reduceId := ihash(kv.Key) % reply.TotalReduce
+					reduceId := ihash(kv.Key) % request.TotalReduce
 					reduceFileArray[reduceId] = append(reduceFileArray[reduceId], kv)
 				}
 
 				for i, interKva := range reduceFileArray {
-					intermediateFile := fmt.Sprintf("mr-%d-%d.json", reply.ActionId, i)
-					file, err = os.Create(intermediateFile)
+					t, err := os.CreateTemp("", "")
 					if err != nil {
-						log.Fatalf("cannot create %v", intermediateFile)
+						log.Fatal(err)
 					}
-					enc := json.NewEncoder(file)
+					defer os.Remove(t.Name())
+
+					enc := json.NewEncoder(t)
 					for _, kv := range interKva {
 						err := enc.Encode(&kv)
 						if err != nil {
 							log.Fatalf("could not write %s to json", kv)
 						}
 					}
+
+					intermediateFile := fmt.Sprintf("mr-%d-%d.json", request.ActionId, i)
+					err = os.Rename(t.Name(), intermediateFile)
+					if err != nil {
+						log.Fatal(err)
+					}
 				}
-			} else if reply.Action == Terminate {
-				fmt.Printf("all done")
+
+				status := WorkerStatusArg{Action: Map, ActionId: request.ActionId, Status: Done}
+				ok := call("Coordinator.WorkerStatusUpdate", &status, &emptyArg)
+				if !ok {
+					fmt.Printf("status update call failed!\n")
+					break
+				}
+			} else if request.Action == Reduce {
+
+				reduceFilePattern := fmt.Sprintf("mr-*-%d.json", request.ActionId)
+				reduceFiles, err := filepath.Glob(reduceFilePattern)
+				if err != nil {
+					log.Fatal(err)
+				}
+				for _, file := range reduceFiles {
+					fmt.Printf("Reduce %d: %s\n", request.ActionId, file)
+				}
+
+				status := WorkerStatusArg{Action: Reduce, ActionId: request.ActionId, Status: Done}
+				ok := call("Coordinator.WorkerStatusUpdate", &status, &emptyArg)
+				if !ok {
+					fmt.Printf("status update call failed!\n")
+					break
+				}
+			} else if request.Action == Wait {
+				fmt.Print("*twiddling thumbs*\n")
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				fmt.Printf("all done!\n")
 				break
 			}
 		} else {
 			fmt.Printf("call failed!\n")
+			break
 		}
-		time.Sleep(1 * time.Second)
 	}
 
 }

@@ -18,11 +18,22 @@ const (
 	Terminate int = 3
 )
 
+const (
+	Done  int = 0
+	Error int = 1
+)
+
 type WorkerRequestReply struct {
-	Action         int
+	Action         int // Map, Reduce, Wait, Terminate
 	ActionFilepath string
-	ActionId       int
+	ActionId       int // map id or reduce id
 	TotalReduce    int
+}
+
+type WorkerStatusArg struct {
+	Action   int // Map, Reduce
+	ActionId int
+	Status   int // Done, Error
 }
 
 // Cook up a unique-ish UNIX-domain socket name
